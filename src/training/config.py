@@ -47,6 +47,15 @@ class TrainConfig:
     # las etiquetas cuando flippea. Arcos y Verticilos quedan igual.
     hflip_prob: float = 0.5
 
+    # Balanceo de clases via WeightedRandomSampler.
+    # SOCOFing trae A 8.3% / I 33.1% / E 37.1% / V 21.5%: sin balanceo, el G
+    # sufre mode-collapse en Arcos (~498 muestras unicas, la cBN + hinge loss
+    # tira al G hacia clases mayoritarias). Con balanceo, cada batch ve las 4
+    # clases con frecuencia ~uniforme (oversampling de Arcos ~12x).
+    # Default True: experimentalmente comprobado en Fase 5 que sin esto el G
+    # nunca aprende Arcos.
+    balance_classes: bool = True
+
     # logging / sampling / checkpoints
     sample_every_epochs: int = 5
     ckpt_every_epochs: int = 25

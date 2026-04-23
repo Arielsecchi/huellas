@@ -46,7 +46,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from ..data.vucetich import LABEL_TO_SYMBOL, NUM_CLASSES, VucetichClass
@@ -98,6 +98,38 @@ def _hflip_with_label_swap(imgs: torch.Tensor,
     new_labels[swap_i] = _PRESILLA_E
     new_labels[swap_e] = _PRESILLA_I
     return imgs, new_labels
+
+
+def _build_balanced_sampler(dataset: HuellasDataset,
+                            cfg: TrainConfig) -> WeightedRandomSampler:
+    """Sampler que iguala la frecuencia de cada clase Vucetich por epoca.
+
+    Pesos por muestra = 1 / count(clase de la muestra). El sampler tira
+    `len(dataset)` indices con reemplazo, asi que las clases minoritarias
+    (Arcos, ~498 muestras) se muestrean ~12x para igualar a las mayoritarias.
+
+    Por que con reemplazo: sin reemplazo solo podriamos tirar como mucho
+    `min(class_count) * num_classes` ejemplos por epoca (~2000) y quedariamos
+    cortos. Con reemplazo cada epoca ve ~6000 indices balanceados.
+    """
+    labels = dataset.labels.numpy()
+    class_counts = np.bincount(labels, minlength=NUM_CLASSES).astype(np.float64)
+    if (class_counts == 0).any():
+        missing = [int(c) for c, n in enumerate(class_counts) if n == 0]
+        raise RuntimeError(
+            f"WeightedRandomSampler: faltan clases en el dataset: {missing}")
+    per_class_w = 1.0 / class_counts
+    sample_weights = per_class_w[labels]
+    print(f"[sampler] class counts: {class_counts.astype(int).tolist()} "
+          f"-> pesos por clase {np.round(per_class_w / per_class_w.min(), 2).tolist()}")
+    # generator local para reproducibilidad sin pisar el seed global
+    g = torch.Generator().manual_seed(cfg.seed)
+    return WeightedRandomSampler(
+        weights=torch.from_numpy(sample_weights).double(),
+        num_samples=len(dataset),
+        replacement=True,
+        generator=g,
+    )
 
 
 def _build_fixed_samples(cfg: TrainConfig, device: torch.device
@@ -172,15 +204,21 @@ def train(cfg: TrainConfig | None = None) -> None:
 
     # data
     dataset = HuellasDataset()
+    sampler = _build_balanced_sampler(dataset, cfg) if cfg.balance_classes else None
     loader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=True,
+        # sampler y shuffle son mutuamente excluyentes: si hay sampler,
+        # shuffle=False; si no, shuffle=True (orden aleatorio dentro de la epoca).
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory and device.type == "cuda",
         drop_last=True,
     )
-    print(f"[data] {len(dataset)} imagenes | {len(loader)} steps por epoca")
+    sampler_tag = "balanced" if sampler is not None else "uniforme"
+    print(f"[data] {len(dataset)} imagenes | {len(loader)} steps por epoca "
+          f"| sampler={sampler_tag}")
 
     # modelos + init
     generator = Generator(z_dim=cfg.z_dim).to(device)
@@ -336,6 +374,15 @@ def _parse_args() -> TrainConfig:
     p.add_argument("--ckpt-every", type=int, default=cfg.ckpt_every_epochs)
     p.add_argument("--resume", type=str, default=None,
                    help="path a ckpt_NNN.pt para continuar entrenamiento")
+    # flag bool con default heredado del config (True) y --no-balance para apagar
+    bal = p.add_mutually_exclusive_group()
+    bal.add_argument("--balance-classes", dest="balance_classes",
+                     action="store_true",
+                     help="WeightedRandomSampler que iguala las 4 clases Vucetich")
+    bal.add_argument("--no-balance-classes", dest="balance_classes",
+                     action="store_false",
+                     help="DataLoader uniforme (orden estricto del dataset)")
+    p.set_defaults(balance_classes=cfg.balance_classes)
     args = p.parse_args()
     return TrainConfig(
         epochs=args.epochs,
@@ -349,6 +396,7 @@ def _parse_args() -> TrainConfig:
         sample_every_epochs=args.sample_every,
         ckpt_every_epochs=args.ckpt_every,
         resume_from=Path(args.resume) if args.resume else None,
+        balance_classes=args.balance_classes,
     )
 
 
