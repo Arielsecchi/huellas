@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+build/
+dist/
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Datasets, modelos y salidas (no van al repo, pesan demasiado)
+data/raw/
+data/processed/
+models/checkpoints/
+models/final/
+outputs/generated/
+outputs/training_samples/
+outputs/evaluation/
+
+# Base de datos local de la app
+app/backend/data/*.db
+app/backend/data/*.db-journal
+app/backend/data/*.db-wal
+app/backend/data/*.db-shm
+
+# Notebooks: ignoro los checkpoints internos de Jupyter
+.ipynb_checkpoints/
+
+# IDEs / editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Secretos / config local
+.env
+.env.local

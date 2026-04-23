@@ -1,0 +1,21 @@
+# NOTA: torch y torchvision se instalan ANTES de este archivo, con el index-url
+# de CPU. Ver README.md > Setup > paso 2.
+
+# Numérico e imagen
+numpy>=1.26,<3.0
+pillow>=10.0
+opencv-python>=4.10
+
+# Visualización + utilidades
+matplotlib>=3.8
+tqdm>=4.66
+pyyaml>=6.0
+
+# App web (backend)
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.20
+
+# Notebooks (exploración del dataset y evaluación visual)
+jupyterlab>=4.2
+ipykernel>=6.29
