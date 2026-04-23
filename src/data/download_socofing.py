@@ -18,6 +18,40 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEST = PROJECT_ROOT / "data" / "raw" / "socofing"
 
 
+def _flatten(dest_dir: Path) -> None:
+    """Mueve Real/ y Altered/ al top de dest_dir, descartando wrappers.
+
+    El zip de SOCOFing puede venir con uno o dos niveles de envoltorio
+    `SOCOFing/...`. En vez de asumir estructura, buscamos un `Real/`
+    real en cualquier lado y subimos todo lo que esta a su lado.
+    """
+    if (dest_dir / "Real").is_dir():
+        return  # ya aplanado
+
+    found = next(
+        (p for p in dest_dir.rglob("Real") if p.is_dir() and p.parent != dest_dir),
+        None,
+    )
+    if found is None:
+        return  # no encontramos Real/: dejar que la verificacion posterior se queje
+
+    parent = found.parent
+    for item in list(parent.iterdir()):
+        target = dest_dir / item.name
+        if target.exists():
+            shutil.rmtree(target) if target.is_dir() else target.unlink()
+        shutil.move(str(item), str(target))
+
+    # limpiamos los wrappers vacios que quedaron
+    p = parent
+    while p != dest_dir and p.exists():
+        try:
+            p.rmdir()
+        except OSError:
+            break
+        p = p.parent
+
+
 def download(dest_dir: Path = DEFAULT_DEST, force: bool = False) -> Path:
     """Baja SOCOFing desde Kaggle y lo descomprime en dest_dir.
 
@@ -54,16 +88,7 @@ def download(dest_dir: Path = DEFAULT_DEST, force: bool = False) -> Path:
         quiet=False,
     )
 
-    # el zip se descomprime en dest_dir/SOCOFing/{Real,Altered}
-    # aplanamos para que queden en dest_dir/{Real,Altered}
-    nested = dest_dir / "SOCOFing"
-    if nested.exists():
-        for item in nested.iterdir():
-            target = dest_dir / item.name
-            if target.exists():
-                shutil.rmtree(target) if target.is_dir() else target.unlink()
-            shutil.move(str(item), str(target))
-        nested.rmdir()
+    _flatten(dest_dir)
 
     count = sum(1 for _ in (dest_dir / "Real").glob(f"*{socofing.IMAGE_EXT}"))
     if count != socofing.EXPECTED_REAL_COUNT:
