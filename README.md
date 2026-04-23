@@ -111,9 +111,39 @@ python -m src.models.gan
 
 Debería imprimir shapes del forward pass y `[ok] smoke test paso`.
 
+## Entrenamiento
+
+El entrenamiento corre en **Google Colab Free (T4)** porque esta máquina no tiene GPU NVIDIA. En CPU el loop arranca pero una época tarda varios minutos — sólo sirve para smoke tests.
+
+### Smoke test local (CPU)
+
+```bash
+python -m src.training.train --max-steps 2 --epochs 1 --batch-size 8 --num-workers 0
+```
+
+Corre dos iteraciones, guarda un checkpoint, una grilla de samples y el modelo final. Sirve para chequear que todo enchufa antes de ir a Colab.
+
+### Entrenamiento completo (Colab)
+
+1. Subí la carpeta `huellas-gan/` entera a tu Google Drive en `MyDrive/huellas-gan/` (sin `venv/`, con `data/processed/` lleno).
+2. Abrí [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) en Colab.
+3. *Entorno de ejecución → Cambiar tipo de entorno → GPU (T4)*.
+4. Correr las celdas en orden.
+
+El notebook:
+
+- verifica la GPU,
+- monta Drive,
+- instala dependencias,
+- corre un smoke test de 2 iteraciones,
+- entrena 50 épocas (batch 64, ~30-40 min en T4),
+- muestra la grilla final de samples y la curva de pérdida.
+
+Los checkpoints, samples y el modelo final quedan persistidos en Drive. La configuración vive en [src/training/config.py](src/training/config.py) — si querés cambiar épocas, lr, etc., editá ahí o pasá flags por CLI.
+
 ## Estado actual
 
-**Fase 3 — Arquitectura de la GAN:** terminada. Próximo paso: Fase 4 (entrenamiento en Colab).
+**Fase 4 — Entrenamiento:** código listo. Falta correrlo en Colab y volcar los resultados.
 
 | Fase | Descripción | Estado |
 |---|---|---|
@@ -121,7 +151,7 @@ Debería imprimir shapes del forward pass y `[ok] smoke test paso`.
 | 1 | Setup del proyecto | ✅ |
 | 2 | Dataset + preproceso + etiquetado Vucetich | ✅ |
 | 3 | Arquitectura de la GAN | ✅ |
-| 4 | Entrenamiento (Colab) | 🟡 siguiente |
+| 4 | Entrenamiento (Colab) | 🟡 en progreso |
 | 5 | Evaluación | ⏳ |
 | 6 | App web de práctica | ⏳ |
 | 7 | Documentación final | ⏳ |
