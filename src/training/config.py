@@ -71,3 +71,8 @@ class TrainConfig:
 
     # corte temprano para smoke tests (None = entrenar completo)
     max_steps: int | None = None
+
+    # Resumir entrenamiento desde un checkpoint (ckpt_NNN.pt o generator.pt
+    # guardado por _save_checkpoint). Si se define, se cargan G/D/opt_G/opt_D
+    # y se continua desde epoch+1. El log CSV se appendea (no se reescribe).
+    resume_from: Path | None = None

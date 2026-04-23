@@ -193,18 +193,42 @@ def train(cfg: TrainConfig | None = None) -> None:
     opt_d = optim.Adam(discriminator.parameters(), lr=cfg.lr_d,
                        betas=(cfg.beta1, cfg.beta2))
 
+    # resume desde checkpoint si se pidio
+    start_epoch = 1
+    if cfg.resume_from is not None:
+        ck_path = Path(cfg.resume_from)
+        if not ck_path.exists():
+            raise FileNotFoundError(f"resume_from no existe: {ck_path}")
+        ck = torch.load(ck_path, map_location=device, weights_only=False)
+        generator.load_state_dict(ck["generator"])
+        if "discriminator" in ck:
+            discriminator.load_state_dict(ck["discriminator"])
+            opt_g.load_state_dict(ck["opt_g"])
+            opt_d.load_state_dict(ck["opt_d"])
+            start_epoch = int(ck.get("epoch", 0)) + 1
+            print(f"[resume] desde {ck_path} -> continuando en epoca {start_epoch}")
+        else:
+            # checkpoint "final" (solo G). No se puede continuar entrenamiento
+            # porque falta el D y los optimizer states.
+            raise RuntimeError(
+                f"{ck_path} es un checkpoint 'final' (solo G). Para resume "
+                "usar un ckpt_NNN.pt de models/checkpoints/.")
+
     fixed_z, fixed_labels = _build_fixed_samples(cfg, device)
 
-    # log csv
+    # log csv: modo append si estamos resumiendo, write si es corrida nueva
     cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(cfg.log_path, "w", newline="", encoding="utf-8")
+    log_is_new = not (cfg.resume_from is not None and cfg.log_path.exists())
+    log_file = open(cfg.log_path, "a" if not log_is_new else "w",
+                    newline="", encoding="utf-8")
     log_writer = csv.writer(log_file)
-    log_writer.writerow(["epoch", "loss_d", "loss_g", "seconds"])
+    if log_is_new:
+        log_writer.writerow(["epoch", "loss_d", "loss_g", "seconds"])
 
     global_step = 0
     stopped_early = False
     try:
-        for epoch in range(1, cfg.epochs + 1):
+        for epoch in range(start_epoch, cfg.epochs + 1):
             generator.train()
             discriminator.train()
             t0 = time.time()
@@ -310,6 +334,8 @@ def _parse_args() -> TrainConfig:
                    help="corta el entrenamiento tras N steps (smoke test)")
     p.add_argument("--sample-every", type=int, default=cfg.sample_every_epochs)
     p.add_argument("--ckpt-every", type=int, default=cfg.ckpt_every_epochs)
+    p.add_argument("--resume", type=str, default=None,
+                   help="path a ckpt_NNN.pt para continuar entrenamiento")
     args = p.parse_args()
     return TrainConfig(
         epochs=args.epochs,
@@ -322,6 +348,7 @@ def _parse_args() -> TrainConfig:
         max_steps=args.max_steps,
         sample_every_epochs=args.sample_every,
         ckpt_every_epochs=args.ckpt_every,
+        resume_from=Path(args.resume) if args.resume else None,
     )
 
 
