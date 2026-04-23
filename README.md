@@ -101,17 +101,27 @@ python -m src.data.download_socofing
 
 Baja ~300 MB a `data/raw/socofing/`. Si ya está presente no re-descarga (pasar `--force` para forzar).
 
+## Arquitectura de la GAN
+
+cDCGAN condicional (128x128 grayscale, 4 clases Vucetich). Detalles en el docstring de [src/models/gan.py](src/models/gan.py). Smoke test rápido:
+
+```bash
+python -m src.models.gan
+```
+
+Debería imprimir shapes del forward pass y `[ok] smoke test paso`.
+
 ## Estado actual
 
-**Fase 1 — Setup del proyecto:** terminada. Próximo paso: Fase 2 (dataset).
+**Fase 3 — Arquitectura de la GAN:** terminada. Próximo paso: Fase 4 (entrenamiento en Colab).
 
 | Fase | Descripción | Estado |
 |---|---|---|
 | 0 | Diagnóstico de hardware | ✅ |
 | 1 | Setup del proyecto | ✅ |
-| 2 | Dataset + preproceso + etiquetado Vucetich | 🟡 siguiente |
-| 3 | Arquitectura de la GAN | ⏳ |
-| 4 | Entrenamiento (Colab) | ⏳ |
+| 2 | Dataset + preproceso + etiquetado Vucetich | ✅ |
+| 3 | Arquitectura de la GAN | ✅ |
+| 4 | Entrenamiento (Colab) | 🟡 siguiente |
 | 5 | Evaluación | ⏳ |
 | 6 | App web de práctica | ⏳ |
 | 7 | Documentación final | ⏳ |
