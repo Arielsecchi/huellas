@@ -4,17 +4,24 @@ Pensado para correr en Colab Free (T4) porque esta maquina no tiene GPU
 NVIDIA. Tambien corre en CPU, pero unicamente para smoke tests (cada
 epoca tarda ~varios minutos).
 
-Receta DCGAN clasica:
+Receta (DCGAN clasica + 3 ajustes modernos):
   - Adam(betas=0.5, 0.999), lr=2e-4 parejo para G y D.
-  - BCE con logits sobre el output del Discriminator.
-  - Label smoothing en reales: en lugar de y=1.0 usamos y=0.9. Evita
-    que D se confie demasiado y mate el gradiente del G.
-  - Non-saturating G loss: BCE(D(fake), 1.0). Equivalente a
-    maximizar log D(fake) en lugar de minimizar log(1-D(fake)).
+  - **Hinge loss**:
+      D real -> ReLU(1 - D(real)).mean()
+      D fake -> ReLU(1 + D(fake)).mean()
+      G      -> -D(fake).mean()
+    Mas estable que BCE en datasets chicos y ayuda a que el G aprenda
+    detalle fino (crestas) en vez de quedarse en blobs suaves.
+  - **Horizontal flip aleatorio** en reales. El flip cambia la clase de
+    las presillas (I <-> E), asi que cuando flippeamos tambien intercambiamos
+    la etiqueta. Arcos y Verticilos quedan con su clase original.
+  - **Class-conditional BatchNorm** en el G (ver src/models/gan.py). Esto
+    es lo que hace que el G *tenga que* diferenciar clases en cada capa,
+    no solo en la entrada.
 
 Para cada epoca:
-  1. D step: forward real y fake, backprop sobre loss_d, optimizer step.
-  2. G step: forward fake (sin detach), backprop sobre loss_g.
+  1. D step: forward real (con hflip) y fake, hinge loss, optimizer step.
+  2. G step: forward fake (sin detach), hinge loss, optimizer step.
   3. Log de losses medios por epoca.
   4. Cada sample_every_epochs: grilla de samples fija por clase.
   5. Cada ckpt_every_epochs: guardar checkpoint completo.
@@ -23,7 +30,7 @@ Al final se guarda unicamente el state_dict del Generator en
 models/final/generator.pt (lo que necesita la app web).
 
 Uso:
-  python -m src.training.train                    # defaults
+  python -m src.training.train                    # defaults (150 epocas)
   python -m src.training.train --epochs 5         # corto
   python -m src.training.train --max-steps 4      # smoke test (2 iters)
 """
@@ -37,7 +44,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch import nn, optim
+import torch.nn.functional as F
+from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -45,6 +53,10 @@ from ..data.vucetich import LABEL_TO_SYMBOL, NUM_CLASSES, VucetichClass
 from ..models.gan import Discriminator, Generator, init_weights
 from .config import TrainConfig
 from .dataset import HuellasDataset
+
+# codigos de clase para el swap I<->E al flippear horizontalmente
+_PRESILLA_I = int(VucetichClass.PRESILLA_INTERNA)
+_PRESILLA_E = int(VucetichClass.PRESILLA_EXTERNA)
 
 
 def _resolve_device(device: str | None) -> torch.device:
@@ -58,6 +70,34 @@ def _seed_all(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def _hflip_with_label_swap(imgs: torch.Tensor,
+                           labels: torch.Tensor,
+                           prob: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Horizontal flip aleatorio por imagen.
+
+    El flip horizontal convierte una presilla interna en externa (y vice
+    versa) porque invierte la posicion del core respecto al centro. Para
+    arcos y verticilos el flip conserva la clase. Por eso cuando flippeamos
+    tambien intercambiamos la etiqueta de las presillas.
+    """
+    if prob <= 0.0:
+        return imgs, labels
+    b = imgs.shape[0]
+    flip_mask = torch.rand(b, device=imgs.device) < prob
+    if not flip_mask.any():
+        return imgs, labels
+
+    imgs = imgs.clone()
+    imgs[flip_mask] = torch.flip(imgs[flip_mask], dims=[3])
+
+    new_labels = labels.clone()
+    swap_i = flip_mask & (labels == _PRESILLA_I)
+    swap_e = flip_mask & (labels == _PRESILLA_E)
+    new_labels[swap_i] = _PRESILLA_E
+    new_labels[swap_e] = _PRESILLA_I
+    return imgs, new_labels
 
 
 def _build_fixed_samples(cfg: TrainConfig, device: torch.device
@@ -152,7 +192,6 @@ def train(cfg: TrainConfig | None = None) -> None:
                        betas=(cfg.beta1, cfg.beta2))
     opt_d = optim.Adam(discriminator.parameters(), lr=cfg.lr_d,
                        betas=(cfg.beta1, cfg.beta2))
-    criterion = nn.BCEWithLogitsLoss()
 
     fixed_z, fixed_labels = _build_fixed_samples(cfg, device)
 
@@ -175,36 +214,35 @@ def train(cfg: TrainConfig | None = None) -> None:
             for real_imgs, real_labels in pbar:
                 real_imgs = real_imgs.to(device, non_blocking=True)
                 real_labels = real_labels.to(device, non_blocking=True)
+
+                # horizontal flip aleatorio con swap I<->E para presillas
+                real_imgs, real_labels = _hflip_with_label_swap(
+                    real_imgs, real_labels, cfg.hflip_prob)
                 b = real_imgs.shape[0]
 
-                # --- D step ---
+                # --- D step (hinge) ---
                 opt_d.zero_grad(set_to_none=True)
-                # reales
+                # reales: queremos logits > 1
                 d_real = discriminator(real_imgs, real_labels)
-                y_real = torch.full((b,), cfg.real_label_smooth,
-                                    device=device, dtype=d_real.dtype)
-                loss_d_real = criterion(d_real, y_real)
-                # falsos: G genera con clases aleatorias (misma distribucion uniforme)
+                loss_d_real = F.relu(1.0 - d_real).mean()
+                # falsos: queremos logits < -1. G genera con clases uniformes.
                 z = torch.randn(b, cfg.z_dim, device=device)
                 fake_labels = torch.randint(0, NUM_CLASSES, (b,), device=device)
                 fake = generator(z, fake_labels).detach()
                 d_fake = discriminator(fake, fake_labels)
-                y_fake = torch.full((b,), cfg.fake_label,
-                                    device=device, dtype=d_fake.dtype)
-                loss_d_fake = criterion(d_fake, y_fake)
+                loss_d_fake = F.relu(1.0 + d_fake).mean()
                 loss_d = loss_d_real + loss_d_fake
                 loss_d.backward()
                 opt_d.step()
 
-                # --- G step ---
+                # --- G step (hinge) ---
                 opt_g.zero_grad(set_to_none=True)
                 z = torch.randn(b, cfg.z_dim, device=device)
                 fake_labels = torch.randint(0, NUM_CLASSES, (b,), device=device)
                 fake = generator(z, fake_labels)
                 d_fake_for_g = discriminator(fake, fake_labels)
-                # non-saturating: queremos que D crea que los fake son reales
-                y_for_g = torch.ones(b, device=device, dtype=d_fake_for_g.dtype)
-                loss_g = criterion(d_fake_for_g, y_for_g)
+                # maximizar D(fake) => minimizar -D(fake)
+                loss_g = -d_fake_for_g.mean()
                 loss_g.backward()
                 opt_g.step()
 
@@ -265,6 +303,7 @@ def _parse_args() -> TrainConfig:
     p.add_argument("--lr-g", type=float, default=cfg.lr_g)
     p.add_argument("--lr-d", type=float, default=cfg.lr_d)
     p.add_argument("--num-workers", type=int, default=cfg.num_workers)
+    p.add_argument("--hflip-prob", type=float, default=cfg.hflip_prob)
     p.add_argument("--device", type=str, default=None,
                    help='"cuda" | "cpu". None = auto-detect.')
     p.add_argument("--max-steps", type=int, default=None,
@@ -278,6 +317,7 @@ def _parse_args() -> TrainConfig:
         lr_g=args.lr_g,
         lr_d=args.lr_d,
         num_workers=args.num_workers,
+        hflip_prob=args.hflip_prob,
         device=args.device,
         max_steps=args.max_steps,
         sample_every_epochs=args.sample_every,

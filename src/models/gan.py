@@ -1,19 +1,24 @@
 """Arquitectura de la GAN condicional (cDCGAN) para huellas 128x128.
 
-Basada en DCGAN (Radford et al. 2015) + condicionamiento por etiqueta al
-estilo Mirza & Osindero 2014. La condicion es la clase Vucetich (4 clases:
-Arco / Presilla Interna / Presilla Externa / Verticilo) y se inyecta:
+Basada en DCGAN (Radford et al. 2015) + condicionamiento mediante
+**class-conditional BatchNorm** (de Vries et al. 2017, Miyato et al. 2018).
 
-  - en el Generator: como un embedding que se concatena al ruido z en el
-    eje de canales, antes de la primera ConvTranspose.
-  - en el Discriminator: como un embedding espacial (H*W) que se concatena
-    a la imagen como un canal extra.
+Por que cBN y no concat-en-z como en cDCGAN original: con solo concatenar la
+etiqueta al ruido z en la entrada del G, la señal de clase se diluye en capas
+profundas y el G termina ignorandola. cBN inyecta la etiqueta en CADA bloque
+reemplazando los (gamma, beta) globales del BatchNorm por (gamma, beta) por
+clase. Asi la condicion llega con fuerza a todas las capas del G.
+
+Mantenemos el concat-en-z TAMBIEN como señal auxiliar al primer bloque: el
+ruido y la clase se mezclan desde la entrada y se refuerzan capa por capa.
+
+Discriminator: condicionamiento por mapa espacial aprendible concatenado como
+canal extra (Mirza-Osindero). Simple y funciona bien.
 
 Por que cDCGAN y no algo mas moderno (SAGAN, StyleGAN, BigGAN):
 
   1. Es la arquitectura condicional mas simple que funciona bien a 128x128
-     con datasets chicos (~6k). Ideal para un primer entrenamiento que
-     tenemos que correr en Colab Free (T4, 12 GB).
+     con datasets chicos (~6k). Ideal para entrenar en Colab Free (T4, 12 GB).
   2. Es pedagogica: el codigo se lee de arriba abajo sin capas
      sofisticadas (attention, style blocks, noise injection, etc.).
   3. Si los resultados no convencen pasamos a algo mas pesado en Fase 5,
@@ -34,7 +39,7 @@ Convenciones:
 
   - Imagenes en [-1, 1]  (salida Tanh del G, preproc del dataset).
   - Discriminator devuelve LOGITS, no probabilidades: el loop de
-    entrenamiento usa BCEWithLogitsLoss (numericamente mas estable).
+    entrenamiento usa hinge loss sobre los logits directo.
   - Init de pesos: N(0, 0.02) en Conv/ConvT, N(1, 0.02) en BatchNorm
     (receta original DCGAN).
 """
@@ -58,17 +63,64 @@ BN_INIT_MEAN = 1.0
 BN_INIT_STD = 0.02
 
 
-def _g_block(in_ch: int, out_ch: int) -> nn.Sequential:
-    """Bloque estandar del Generator: ConvT 4x4 stride 2 + BN + ReLU.
+class ConditionalBatchNorm2d(nn.Module):
+    """BatchNorm con (gamma, beta) aprendibles por clase.
 
-    Duplica H y W (stride 2, padding 1, kernel 4 = up by 2x exacto).
+    Ecuacion: y = gamma(clase) * normalize(x) + beta(clase)
+
+    La normalizacion (resta media, divide std) es identica a un BN estandar;
+    cambia solo la parte affine (scale/shift), que depende de la etiqueta.
+    Init: gamma=1, beta=0 por clase -> arranca como un BN afin trivial.
     """
-    return nn.Sequential(
-        nn.ConvTranspose2d(in_ch, out_ch, kernel_size=4, stride=2,
-                           padding=1, bias=False),
-        nn.BatchNorm2d(out_ch),
-        nn.ReLU(inplace=True),
-    )
+
+    def __init__(self, num_features: int, num_classes: int) -> None:
+        super().__init__()
+        # BN sin affine: solo normaliza. El affine lo mete cada clase.
+        self.bn = nn.BatchNorm2d(num_features, affine=False)
+        self.gamma_embed = nn.Embedding(num_classes, num_features)
+        self.beta_embed = nn.Embedding(num_classes, num_features)
+        nn.init.ones_(self.gamma_embed.weight)
+        nn.init.zeros_(self.beta_embed.weight)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        out = self.bn(x)
+        gamma = self.gamma_embed(y).view(-1, x.size(1), 1, 1)
+        beta = self.beta_embed(y).view(-1, x.size(1), 1, 1)
+        return gamma * out + beta
+
+
+class _GInitBlock(nn.Module):
+    """Proyecta (B, in_dim, 1, 1) -> (B, out_ch, 4, 4) con cBN + ReLU.
+
+    Usa ConvT 4x4 stride 1 padding 0 porque arrancamos desde 1x1.
+    """
+
+    def __init__(self, in_dim: int, out_ch: int, num_classes: int) -> None:
+        super().__init__()
+        self.convt = nn.ConvTranspose2d(in_dim, out_ch, kernel_size=4,
+                                        stride=1, padding=0, bias=False)
+        self.cbn = ConditionalBatchNorm2d(out_ch, num_classes)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return self.act(self.cbn(self.convt(x), y))
+
+
+class _GUpBlock(nn.Module):
+    """Bloque up del Generator: ConvT 4x4 stride 2 + cBN + ReLU.
+
+    Duplica H y W (kernel 4 stride 2 padding 1 = up 2x exacto).
+    """
+
+    def __init__(self, in_ch: int, out_ch: int, num_classes: int) -> None:
+        super().__init__()
+        self.convt = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=4,
+                                        stride=2, padding=1, bias=False)
+        self.cbn = ConditionalBatchNorm2d(out_ch, num_classes)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return self.act(self.cbn(self.convt(x), y))
 
 
 def _d_block(in_ch: int, out_ch: int, use_bn: bool = True) -> nn.Sequential:
@@ -88,7 +140,12 @@ def _d_block(in_ch: int, out_ch: int, use_bn: bool = True) -> nn.Sequential:
 
 
 class Generator(nn.Module):
-    """Generator condicional: (z, clase) -> imagen 1x128x128 en [-1, 1]."""
+    """Generator condicional: (z, clase) -> imagen 1x128x128 en [-1, 1].
+
+    Doble via de condicionamiento: (a) embedding concatenado a z en la
+    entrada, (b) cBN en cada bloque. La (b) es la que realmente fuerza al
+    G a diferenciar clases en capas profundas.
+    """
 
     def __init__(self,
                  z_dim: int = Z_DIM,
@@ -101,25 +158,17 @@ class Generator(nn.Module):
         self.embed_dim = embed_dim
         self.num_classes = num_classes
 
-        # embedding de clase: un vector aprendible por cada clase Vucetich
+        # embedding de clase para el concat-en-z
         self.label_embed = nn.Embedding(num_classes, embed_dim)
 
         c = base_channels
         in_dim = z_dim + embed_dim
 
-        # primer bloque: proyecta (B, in_dim, 1, 1) -> (B, 16c, 4, 4)
-        # usamos ConvT 4x4 stride 1 padding 0 porque arrancamos desde 1x1
-        self.init_block = nn.Sequential(
-            nn.ConvTranspose2d(in_dim, 16 * c, kernel_size=4, stride=1,
-                               padding=0, bias=False),
-            nn.BatchNorm2d(16 * c),
-            nn.ReLU(inplace=True),
-        )
-
-        self.up1 = _g_block(16 * c, 8 * c)   # 4  -> 8
-        self.up2 = _g_block(8 * c, 4 * c)    # 8  -> 16
-        self.up3 = _g_block(4 * c, 2 * c)    # 16 -> 32
-        self.up4 = _g_block(2 * c, c)        # 32 -> 64
+        self.init_block = _GInitBlock(in_dim, 16 * c, num_classes)   # 1 -> 4
+        self.up1 = _GUpBlock(16 * c, 8 * c, num_classes)             # 4  -> 8
+        self.up2 = _GUpBlock(8 * c, 4 * c, num_classes)              # 8  -> 16
+        self.up3 = _GUpBlock(4 * c, 2 * c, num_classes)              # 16 -> 32
+        self.up4 = _GUpBlock(2 * c, c, num_classes)                  # 32 -> 64
 
         # bloque final: ConvT a img_channels + Tanh. Sin BN en la salida.
         self.to_img = nn.Sequential(
@@ -134,12 +183,12 @@ class Generator(nn.Module):
         embed = self.label_embed(labels)                       # (B, embed_dim)
         x = torch.cat([z, embed], dim=1).unsqueeze(-1).unsqueeze(-1)
         # x: (B, z_dim + embed_dim, 1, 1)
-        x = self.init_block(x)   # (B, 16c, 4, 4)
-        x = self.up1(x)          # (B,  8c, 8, 8)
-        x = self.up2(x)          # (B,  4c, 16, 16)
-        x = self.up3(x)          # (B,  2c, 32, 32)
-        x = self.up4(x)          # (B,   c, 64, 64)
-        return self.to_img(x)    # (B, img_channels, 128, 128)
+        x = self.init_block(x, labels)   # (B, 16c, 4, 4)
+        x = self.up1(x, labels)          # (B,  8c, 8, 8)
+        x = self.up2(x, labels)          # (B,  4c, 16, 16)
+        x = self.up3(x, labels)          # (B,  2c, 32, 32)
+        x = self.up4(x, labels)          # (B,   c, 64, 64)
+        return self.to_img(x)            # (B, img_channels, 128, 128)
 
 
 class Discriminator(nn.Module):
@@ -192,8 +241,9 @@ def init_weights(module: nn.Module) -> None:
     """Inicializacion estandar DCGAN aplicada via model.apply(init_weights).
 
     Conv/ConvTranspose: N(0, 0.02); BatchNorm: weight N(1, 0.02), bias=0.
-    El embedding lo dejamos en el default de PyTorch (N(0, 1)) porque es
-    lo que espera un embedding aprendible en este tipo de uso.
+    Los embeddings los dejamos intactos: el `label_embed` del G en default
+    de PyTorch, y los gamma/beta de cBN ya se inicializaron a 1/0 en el
+    constructor (arranque como BN afin trivial).
     """
     classname = module.__class__.__name__
     if "Conv" in classname:
@@ -203,10 +253,12 @@ def init_weights(module: nn.Module) -> None:
         if getattr(module, "bias", None) is not None:
             nn.init.zeros_(module.bias)
     elif "BatchNorm" in classname:
-        if module.weight is not None:
+        # cBN tiene bn.affine=False -> no tiene weight/bias que inicializar.
+        # Solo BN "full affine" del D entra aca.
+        if getattr(module, "weight", None) is not None:
             nn.init.normal_(module.weight, mean=BN_INIT_MEAN,
                             std=BN_INIT_STD)
-        if module.bias is not None:
+        if getattr(module, "bias", None) is not None:
             nn.init.zeros_(module.bias)
 
 

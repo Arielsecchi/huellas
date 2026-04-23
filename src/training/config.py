@@ -1,18 +1,23 @@
 """Hiperparametros del entrenamiento.
 
-Los valores default siguen la receta DCGAN (Radford et al. 2015):
+Los valores default siguen la receta DCGAN (Radford et al. 2015) con dos
+ajustes modernos que estabilizan mucho en datasets chicos:
 
-  - Adam con betas (0.5, 0.999): beta1 bajo evita que el G oscile
-    demasiado en las primeras epocas.
+  - **Hinge loss** en vez de BCE: empuja los logits de reales hacia +1 y los
+    de fakes hacia -1, con saturacion via ReLU. Mucho mas estable que BCE
+    cuando el D se vuelve muy seguro y el gradiente del G colapsa.
+  - **Adam betas (0.5, 0.999)**: beta1 bajo evita que el G oscile demasiado
+    en las primeras epocas.
   - Learning rate 2e-4 parejo para G y D.
   - Batch size 64: entra comodo en una T4 de Colab Free a 128x128.
 
-Otros defaults razonables para este dataset (~6k huellas 128x128):
+Defaults razonables para este dataset (~6k huellas 128x128):
 
-  - 50 epocas: ~4700 steps con batch 64. En T4 son ~30-40 minutos.
-  - Sampling cada 2 epocas para ver evolucion sin saturar Drive.
-  - Checkpoint cada 10 epocas.
-  - Label smoothing 0.9 en reales (truco clasico para estabilizar el D).
+  - 150 epocas: con hinge + cBN + horizontal flip, a las 50 epocas todavia
+    no habia aprendido crestas bien definidas. 150 dejan margen y en T4
+    tardan ~2-2.5 h (factible en Colab Free de una sentada).
+  - Sampling cada 5 epocas (30 grillas en total, Drive contento).
+  - Checkpoint cada 25 epocas.
 """
 
 from dataclasses import dataclass
@@ -24,7 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 @dataclass
 class TrainConfig:
     # duracion
-    epochs: int = 50
+    epochs: int = 150
     batch_size: int = 64
 
     # optimizador (Adam DCGAN)
@@ -36,13 +41,15 @@ class TrainConfig:
     # ruido + arquitectura
     z_dim: int = 100
 
-    # trucos de estabilidad
-    real_label_smooth: float = 0.9   # 1.0 -> sin smoothing
-    fake_label: float = 0.0
+    # data augmentation
+    # Horizontal flip aleatorio en reales. Como flippear cambia la clase
+    # de las presillas (Interna <-> Externa), el loop tambien intercambia
+    # las etiquetas cuando flippea. Arcos y Verticilos quedan igual.
+    hflip_prob: float = 0.5
 
     # logging / sampling / checkpoints
-    sample_every_epochs: int = 2
-    ckpt_every_epochs: int = 10
+    sample_every_epochs: int = 5
+    ckpt_every_epochs: int = 25
     samples_per_class: int = 4       # grilla de sampling: 4 clases x N = 16 imgs
     sample_seed: int = 42
 
