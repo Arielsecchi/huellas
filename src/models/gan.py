@@ -12,8 +12,11 @@ clase. Asi la condicion llega con fuerza a todas las capas del G.
 Mantenemos el concat-en-z TAMBIEN como señal auxiliar al primer bloque: el
 ruido y la clase se mezclan desde la entrada y se refuerzan capa por capa.
 
-Discriminator: condicionamiento por mapa espacial aprendible concatenado como
-canal extra (Mirza-Osindero). Simple y funciona bien.
+Discriminator: condicionamiento por mapa espacial aprendible concatenado
+como canal extra (Mirza-Osindero) + **spectral normalization** en cada
+Conv2d (Miyato et al. 2018). SN reemplaza al BN del D original: mantiene
+la red 1-Lipschitz, evita que el D explote sus logits y aplaste al G en
+las primeras epocas. Es la receta estandar para hinge GAN.
 
 Por que cDCGAN y no algo mas moderno (SAGAN, StyleGAN, BigGAN):
 
@@ -123,20 +126,28 @@ class _GUpBlock(nn.Module):
         return self.act(self.cbn(self.convt(x), y))
 
 
-def _d_block(in_ch: int, out_ch: int, use_bn: bool = True) -> nn.Sequential:
-    """Bloque estandar del Discriminator: Conv 4x4 stride 2 + (BN) + LReLU.
+def _sn(module: nn.Module) -> nn.Module:
+    """Wrapper: aplica spectral normalization a un modulo con .weight.
 
-    Reduce H y W a la mitad. BN se desactiva en el primer bloque (receta
-    DCGAN: ayuda a que el D no colapse rapido).
+    La SN reparametriza W como W / sigma(W), con sigma = mayor valor
+    singular estimado via power iteration. Asi la capa queda 1-Lipschitz
+    respecto a la entrada y el D no puede "explotar" sus logits, lo que
+    evita que aplaste al G en las primeras epocas (problema crucial con
+    hinge loss en datasets chicos).
     """
-    layers: list[nn.Module] = [
-        nn.Conv2d(in_ch, out_ch, kernel_size=4, stride=2,
-                  padding=1, bias=not use_bn),
-    ]
-    if use_bn:
-        layers.append(nn.BatchNorm2d(out_ch))
-    layers.append(nn.LeakyReLU(0.2, inplace=True))
-    return nn.Sequential(*layers)
+    return nn.utils.parametrizations.spectral_norm(module)
+
+
+def _d_block(in_ch: int, out_ch: int) -> nn.Sequential:
+    """Bloque estandar del Discriminator: Conv 4x4 stride 2 + SN + LReLU.
+
+    Reduce H y W a la mitad. Spectral norm reemplaza el BN original de
+    DCGAN: controla la escala de los logits sin mezclar estadisticas
+    entre ejemplos (cosa que le traia problemas al D condicional).
+    """
+    conv = _sn(nn.Conv2d(in_ch, out_ch, kernel_size=4, stride=2,
+                         padding=1, bias=True))
+    return nn.Sequential(conv, nn.LeakyReLU(0.2, inplace=True))
 
 
 class Generator(nn.Module):
@@ -212,15 +223,16 @@ class Discriminator(nn.Module):
         c = base_channels
         in_ch = img_channels + 1   # imagen + canal de condicion
 
-        self.down1 = _d_block(in_ch, c, use_bn=False)   # 128 -> 64
-        self.down2 = _d_block(c, 2 * c)                 # 64  -> 32
-        self.down3 = _d_block(2 * c, 4 * c)             # 32  -> 16
-        self.down4 = _d_block(4 * c, 8 * c)             # 16  -> 8
-        self.down5 = _d_block(8 * c, 16 * c)            # 8   -> 4
+        self.down1 = _d_block(in_ch, c)        # 128 -> 64
+        self.down2 = _d_block(c, 2 * c)        # 64  -> 32
+        self.down3 = _d_block(2 * c, 4 * c)    # 32  -> 16
+        self.down4 = _d_block(4 * c, 8 * c)    # 16  -> 8
+        self.down5 = _d_block(8 * c, 16 * c)   # 8   -> 4
 
-        # bloque final: Conv 4x4 stride 1 padding 0 -> logit escalar
-        self.to_logit = nn.Conv2d(16 * c, 1, kernel_size=4, stride=1,
-                                  padding=0, bias=False)
+        # bloque final: Conv 4x4 stride 1 padding 0 -> logit escalar.
+        # SN tambien aca para mantener la cadena 1-Lipschitz hasta el logit.
+        self.to_logit = _sn(nn.Conv2d(16 * c, 1, kernel_size=4, stride=1,
+                                      padding=0, bias=True))
 
     def forward(self, img: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         # img:    (B, img_channels, 128, 128)
