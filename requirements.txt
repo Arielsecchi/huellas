@@ -19,3 +19,6 @@ python-multipart>=0.0.20
 # Notebooks (exploración del dataset y evaluación visual)
 jupyterlab>=4.2
 ipykernel>=6.29
+
+# Dataset (descarga SOCOFing desde Kaggle)
+kaggle>=1.6

@@ -81,6 +81,26 @@ huellas-gan/
 └── README.md
 ```
 
+## Datasets
+
+### SOCOFing (Sokoto Coventry Fingerprint Dataset)
+
+6000 huellas reales, libres, en Kaggle. No trae clase Vucetich — la etiquetamos nosotros en el paso siguiente.
+
+**Conseguir el token de Kaggle (una sola vez):**
+
+1. Crearse cuenta en [kaggle.com](https://www.kaggle.com/) (gratis).
+2. Ir a tu avatar → **Settings** → bajar hasta **API** → click **Create New Token**. Se baja un archivo `kaggle.json`.
+3. Moverlo a `C:\Users\<tu-usuario>\.kaggle\kaggle.json` (crear la carpeta si no existe).
+
+**Descargar el dataset:**
+
+```bash
+python -m src.data.download_socofing
+```
+
+Baja ~300 MB a `data/raw/socofing/`. Si ya está presente no re-descarga (pasar `--force` para forzar).
+
 ## Estado actual
 
 **Fase 1 — Setup del proyecto:** terminada. Próximo paso: Fase 2 (dataset).
