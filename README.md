@@ -83,13 +83,13 @@ huellas-gan/
 
 ## Estado actual
 
-**Fase 1 — Setup del proyecto:** en curso.
+**Fase 1 — Setup del proyecto:** terminada. Próximo paso: Fase 2 (dataset).
 
 | Fase | Descripción | Estado |
 |---|---|---|
 | 0 | Diagnóstico de hardware | ✅ |
-| 1 | Setup del proyecto | 🟡 en curso |
-| 2 | Dataset + preproceso + etiquetado Vucetich | ⏳ |
+| 1 | Setup del proyecto | ✅ |
+| 2 | Dataset + preproceso + etiquetado Vucetich | 🟡 siguiente |
 | 3 | Arquitectura de la GAN | ⏳ |
 | 4 | Entrenamiento (Colab) | ⏳ |
 | 5 | Evaluación | ⏳ |
