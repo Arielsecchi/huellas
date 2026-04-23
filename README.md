@@ -125,8 +125,8 @@ Corre dos iteraciones, guarda un checkpoint, una grilla de samples y el modelo f
 
 ### Entrenamiento completo (Colab)
 
-1. Subí `kaggle.json` a tu Drive en `MyDrive/huellas-gan-secrets/kaggle.json` (cómo conseguirlo: sección [Datasets](#datasets) abajo).
-2. Abrí [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) en Colab.
+1. Tené tu `kaggle.json` a mano (cómo conseguirlo: sección [Datasets](#datasets) abajo).
+2. Abrí el notebook directamente en Colab: [train_colab.ipynb en Colab](https://colab.research.google.com/github/Arielsecchi/huellas/blob/main/huellas-gan/notebooks/train_colab.ipynb).
 3. *Entorno de ejecución → Cambiar tipo de entorno → GPU (T4)*.
 4. Correr las celdas en orden.
 
@@ -135,16 +135,17 @@ El notebook:
 - verifica la GPU,
 - **clona el repo desde GitHub** (siempre la última versión),
 - instala dependencias,
+- te pide que **subas `kaggle.json` una vez** (con el botón "Elegir archivos"),
 - **regenera el dataset dentro de la VM** (descarga SOCOFing + preproceso + etiquetado Vucetich, ~10 min),
 - corre un smoke test de 2 iteraciones,
 - entrena 50 épocas (batch 64, ~30-40 min en T4),
-- **copia los outputs a Drive** (`MyDrive/huellas-gan-outputs/`) para que sobrevivan al reinicio de la VM,
-- muestra la grilla final de samples y la curva de pérdida.
+- muestra la grilla final de samples y la curva de pérdida,
+- **arma un ZIP con el modelo + samples y te lo baja a tu PC**.
 
-Al terminar vas a tener en Drive:
+En tu PC vas a recibir `huellas_out.zip` con:
 
-- `huellas-gan-outputs/generator.pt` — el modelo entrenado (lo usa la app de Fase 6).
-- `huellas-gan-outputs/training_samples/` — grillas por época + `train_log.csv`.
+- `final/generator.pt` — el modelo entrenado (lo usa la app de Fase 6).
+- `training_samples/` — grillas por época + `train_log.csv`.
 
 La configuración vive en [src/training/config.py](src/training/config.py) — si querés cambiar épocas, lr, etc., editá ahí o pasá flags por CLI.
 
