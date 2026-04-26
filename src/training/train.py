@@ -4,11 +4,8 @@ Pensado para correr en Colab Free (T4) porque esta maquina no tiene GPU
 NVIDIA. Tambien corre en CPU, pero unicamente para smoke tests (cada
 epoca tarda ~varios minutos).
 
-Receta ("camino B"): DCGAN clasica + 6 ajustes modernos para datasets
-chicos (~6k imagenes):
-  - Adam(betas=0.5, 0.999) con **TTUR** (Heusel et al. 2017): lr_d > lr_g.
-    Default lr_g=1e-4, lr_d=4e-4. Ayuda al D a mantener el ritmo en
-    setups con SN+hinge sin necesidad de mas pasos del D.
+Receta (DCGAN clasica + 3 ajustes modernos):
+  - Adam(betas=0.5, 0.999), lr=2e-4 parejo para G y D.
   - **Hinge loss**:
       D real -> ReLU(1 - D(real)).mean()
       D fake -> ReLU(1 + D(fake)).mean()
@@ -21,26 +18,16 @@ chicos (~6k imagenes):
   - **Class-conditional BatchNorm** en el G (ver src/models/gan.py). Esto
     es lo que hace que el G *tenga que* diferenciar clases en cada capa,
     no solo en la entrada.
-  - **DiffAugment** (Zhao et al. 2020) sobre real Y fake antes del D, con
-    policy "translation,cutout". Multiplica el dataset efectivo y mantiene
-    el gradiente del G fluyendo a traves de la augmentacion.
-  - **EMA del Generator**: mantenemos un G "promedio movil" (decay 0.999)
-    en paralelo al G de entrenamiento. El sampling y el modelo final usan
-    el G_EMA. Suaviza oscilaciones del adversarial training y suele bajar
-    FID notablemente, sin costo de GPU adicional (StyleGAN2/BigGAN lo usan
-    de forma estandar).
 
 Para cada epoca:
-  1. D step: real + DiffAug -> D, fake + DiffAug -> D, hinge loss, optimizer step.
-  2. G step: fake (sin detach) + DiffAug -> D, hinge loss, optimizer step.
-  3. EMA update del Generator.
-  4. Log de losses medios por epoca.
-  5. Cada sample_every_epochs: grilla de samples fija por clase, usando G_EMA.
-  6. Cada ckpt_every_epochs: guardar checkpoint completo (G + G_EMA + D + opts).
+  1. D step: forward real (con hflip) y fake, hinge loss, optimizer step.
+  2. G step: forward fake (sin detach), hinge loss, optimizer step.
+  3. Log de losses medios por epoca.
+  4. Cada sample_every_epochs: grilla de samples fija por clase.
+  5. Cada ckpt_every_epochs: guardar checkpoint completo.
 
-Al final se guarda el state_dict del **G_EMA** en models/final/generator.pt
-bajo la key "generator" (lo que necesita la app web; la app no sabe ni
-necesita saber que es el promedio movil).
+Al final se guarda unicamente el state_dict del Generator en
+models/final/generator.pt (lo que necesita la app web).
 
 Uso:
   python -m src.training.train                    # defaults (150 epocas)
@@ -49,7 +36,6 @@ Uso:
 """
 
 import argparse
-import copy
 import csv
 import random
 import time
@@ -59,7 +45,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn, optim
+from torch import optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -67,7 +53,6 @@ from ..data.vucetich import LABEL_TO_SYMBOL, NUM_CLASSES, VucetichClass
 from ..models.gan import Discriminator, Generator, init_weights
 from .config import TrainConfig
 from .dataset import HuellasDataset
-from .diffaug import diff_augment
 
 # codigos de clase para el swap I<->E al flippear horizontalmente
 _PRESILLA_I = int(VucetichClass.PRESILLA_INTERNA)
@@ -147,20 +132,6 @@ def _build_balanced_sampler(dataset: HuellasDataset,
     )
 
 
-@torch.no_grad()
-def _ema_update(g_ema: nn.Module, g: nn.Module, decay: float) -> None:
-    """Actualiza pesos y buffers del G_EMA hacia los del G.
-
-    Pesos: ema = decay * ema + (1 - decay) * g  (lerp).
-    Buffers (running_mean/var de los BN sin affine, etc.): copia directa.
-    Los buffers no son aprendidos -> no tiene sentido promediarlos, copiamos.
-    """
-    for ema_p, p in zip(g_ema.parameters(), g.parameters()):
-        ema_p.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
-    for ema_b, b in zip(g_ema.buffers(), g.buffers()):
-        ema_b.data.copy_(b.data)
-
-
 def _build_fixed_samples(cfg: TrainConfig, device: torch.device
                          ) -> tuple[torch.Tensor, torch.Tensor]:
     """Arma (z, labels) fijos para visualizar progreso siempre con el mismo input.
@@ -207,7 +178,6 @@ def _save_sample_grid(generator: Generator,
 
 def _save_checkpoint(path: Path,
                      generator: Generator,
-                     generator_ema: Generator,
                      discriminator: Discriminator,
                      opt_g: optim.Optimizer,
                      opt_d: optim.Optimizer,
@@ -216,7 +186,6 @@ def _save_checkpoint(path: Path,
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "generator": generator.state_dict(),
-        "generator_ema": generator_ema.state_dict(),
         "discriminator": discriminator.state_dict(),
         "opt_g": opt_g.state_dict(),
         "opt_d": opt_d.state_dict(),
@@ -257,22 +226,10 @@ def train(cfg: TrainConfig | None = None) -> None:
     generator.apply(init_weights)
     discriminator.apply(init_weights)
 
-    # G_EMA: copia del Generator que se actualiza como promedio movil tras
-    # cada G step. Siempre en eval, sin grad (no participa en backward).
-    # El sampling y el modelo final salen de aca, no del G "crudo".
-    generator_ema = copy.deepcopy(generator).eval()
-    for p in generator_ema.parameters():
-        p.requires_grad_(False)
-
-    # TTUR (Heusel et al. 2017): lr_d > lr_g por default.
     opt_g = optim.Adam(generator.parameters(), lr=cfg.lr_g,
                        betas=(cfg.beta1, cfg.beta2))
     opt_d = optim.Adam(discriminator.parameters(), lr=cfg.lr_d,
                        betas=(cfg.beta1, cfg.beta2))
-
-    print(f"[lr] g={cfg.lr_g}  d={cfg.lr_d}  (TTUR ratio d/g={cfg.lr_d/cfg.lr_g:.2f})")
-    print(f"[diffaug] policy={cfg.diffaug_policy!r}")
-    print(f"[ema] decay={cfg.ema_decay}")
 
     # resume desde checkpoint si se pidio
     start_epoch = 1
@@ -286,13 +243,6 @@ def train(cfg: TrainConfig | None = None) -> None:
             discriminator.load_state_dict(ck["discriminator"])
             opt_g.load_state_dict(ck["opt_g"])
             opt_d.load_state_dict(ck["opt_d"])
-            # Si el ckpt trae G_EMA lo usamos; si no (ckpt previo a camino B),
-            # arrancamos el EMA desde el G recien cargado.
-            if "generator_ema" in ck:
-                generator_ema.load_state_dict(ck["generator_ema"])
-            else:
-                generator_ema.load_state_dict(generator.state_dict())
-                print("[resume] ckpt sin G_EMA -> inicializado desde G")
             start_epoch = int(ck.get("epoch", 0)) + 1
             print(f"[resume] desde {ck_path} -> continuando en epoca {start_epoch}")
         else:
@@ -333,47 +283,30 @@ def train(cfg: TrainConfig | None = None) -> None:
                 b = real_imgs.shape[0]
 
                 # --- D step (hinge) ---
-                # DiffAugment: aplicamos la MISMA policy a real y a fake antes
-                # de que las vea el D. Cada llamada usa randoms independientes
-                # (no es necesario que la aug sea la misma para real y fake;
-                # solo importa que ambos se augmenten para que el D no aprenda
-                # a usar la "augmentacion" como senal de "fake").
                 opt_d.zero_grad(set_to_none=True)
                 # reales: queremos logits > 1
-                real_aug = diff_augment(real_imgs, cfg.diffaug_policy)
-                d_real = discriminator(real_aug, real_labels)
+                d_real = discriminator(real_imgs, real_labels)
                 loss_d_real = F.relu(1.0 - d_real).mean()
                 # falsos: queremos logits < -1. G genera con clases uniformes.
                 z = torch.randn(b, cfg.z_dim, device=device)
                 fake_labels = torch.randint(0, NUM_CLASSES, (b,), device=device)
                 fake = generator(z, fake_labels).detach()
-                fake_aug = diff_augment(fake, cfg.diffaug_policy)
-                d_fake = discriminator(fake_aug, fake_labels)
+                d_fake = discriminator(fake, fake_labels)
                 loss_d_fake = F.relu(1.0 + d_fake).mean()
                 loss_d = loss_d_real + loss_d_fake
                 loss_d.backward()
                 opt_d.step()
 
                 # --- G step (hinge) ---
-                # Importante: el fake del G step TAMBIEN pasa por DiffAugment.
-                # Como la aug es diferenciable, el gradiente vuelve al G a
-                # traves de ella sin que el G aprenda a "imitar" los artefactos
-                # de aug.
                 opt_g.zero_grad(set_to_none=True)
                 z = torch.randn(b, cfg.z_dim, device=device)
                 fake_labels = torch.randint(0, NUM_CLASSES, (b,), device=device)
                 fake = generator(z, fake_labels)
-                fake_aug_g = diff_augment(fake, cfg.diffaug_policy)
-                d_fake_for_g = discriminator(fake_aug_g, fake_labels)
+                d_fake_for_g = discriminator(fake, fake_labels)
                 # maximizar D(fake) => minimizar -D(fake)
                 loss_g = -d_fake_for_g.mean()
                 loss_g.backward()
                 opt_g.step()
-
-                # --- EMA update del Generator ---
-                # Despues del G step: empujamos g_ema un poquito hacia g.
-                # Decay alto (0.999) -> el EMA promedia ~1000 steps recientes.
-                _ema_update(generator_ema, generator, cfg.ema_decay)
 
                 sum_d += float(loss_d.detach())
                 sum_g += float(loss_g.detach())
@@ -394,19 +327,17 @@ def train(cfg: TrainConfig | None = None) -> None:
             log_writer.writerow([epoch, f"{mean_d:.6f}", f"{mean_g:.6f}", f"{dt:.2f}"])
             log_file.flush()
 
-            # sampling: SIEMPRE con G_EMA, que es lo que termina sirviendo
-            # la app. Asi lo que vemos en disco es la calidad real de
-            # inferencia, no el G "crudo" que oscila mas.
+            # sampling
             if epoch % cfg.sample_every_epochs == 0:
                 sample_path = cfg.samples_dir / f"epoch_{epoch:03d}.png"
-                _save_sample_grid(generator_ema, fixed_z, fixed_labels,
+                _save_sample_grid(generator, fixed_z, fixed_labels,
                                   sample_path, cfg.samples_per_class, epoch)
 
-            # checkpoint: guarda G + G_EMA + D + opts para poder resumir
+            # checkpoint
             if epoch % cfg.ckpt_every_epochs == 0:
                 ckpt_path = cfg.checkpoints_dir / f"ckpt_{epoch:03d}.pt"
-                _save_checkpoint(ckpt_path, generator, generator_ema,
-                                 discriminator, opt_g, opt_d, epoch, cfg)
+                _save_checkpoint(ckpt_path, generator, discriminator,
+                                 opt_g, opt_d, epoch, cfg)
                 print(f"[ckpt] {ckpt_path}")
 
             if stopped_early:
@@ -416,17 +347,14 @@ def train(cfg: TrainConfig | None = None) -> None:
     finally:
         log_file.close()
 
-    # modelo final: guardamos el G_EMA bajo la key "generator". La app
-    # carga genericamente bundle["generator"] y no le importa que sea el
-    # promedio movil; le importa que la arquitectura coincida con la que
-    # importa de src.models.gan, cosa que se cumple.
+    # modelo final (solo G, lo que la app necesita para inferencia)
     cfg.final_model_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
-        "generator": generator_ema.state_dict(),
+        "generator": generator.state_dict(),
         "z_dim": cfg.z_dim,
         "num_classes": NUM_CLASSES,
     }, cfg.final_model_path)
-    print(f"[final] {cfg.final_model_path}  (G_EMA, decay={cfg.ema_decay})")
+    print(f"[final] {cfg.final_model_path}")
 
 
 def _parse_args() -> TrainConfig:
@@ -459,10 +387,6 @@ def _parse_args() -> TrainConfig:
                    help="Exponente de los pesos: 1.0 = 1/freq (v2, agresivo), "
                         "0.5 = 1/sqrt(freq) (v3, moderado). Solo aplica si "
                         "--balance-classes esta activo.")
-    p.add_argument("--diffaug-policy", type=str, default=cfg.diffaug_policy,
-                   help='DiffAugment policy ("translation,cutout" | "none").')
-    p.add_argument("--ema-decay", type=float, default=cfg.ema_decay,
-                   help="Decay del promedio movil del Generator (default 0.999).")
     args = p.parse_args()
     return TrainConfig(
         epochs=args.epochs,
@@ -478,8 +402,6 @@ def _parse_args() -> TrainConfig:
         resume_from=Path(args.resume) if args.resume else None,
         balance_classes=args.balance_classes,
         balance_strength=args.balance_strength,
-        diffaug_policy=args.diffaug_policy,
-        ema_decay=args.ema_decay,
     )
 
 

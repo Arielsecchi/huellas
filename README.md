@@ -164,6 +164,34 @@ La configuración vive en [src/training/config.py](src/training/config.py) — s
 | 6 | App web de práctica | ⏳ |
 | 7 | Documentación final | ⏳ |
 
+## Experimentos descartados
+
+### Camino B (2026-04-26) — Upsample+Conv + DiffAugment + EMA + TTUR
+
+**Hipótesis:** la receta v1 (cDCGAN baseline) podía mejorarse para datasets chicos combinando 4 ajustes modernos:
+
+- **Upsample(nearest) + Conv 3x3** en vez de `ConvTranspose2d 4x4 stride=2` en el Generator (Odena et al. 2016, evita checkerboard).
+- **DiffAugment** policy `"translation,cutout"` aplicada a real y fake antes del D (Zhao et al. 2020, multiplica el dataset efectivo).
+- **EMA del Generator** decay 0.999 (StyleGAN2/BigGAN) — el modelo de inferencia es el promedio móvil.
+- **TTUR** `lr_d=4*lr_g` (Heusel et al. 2017).
+
+**Resultado:** descartada. Las samples salieron **notablemente peores que el v1**: bajo contraste, crestas grises tenues, aspecto de "boceto a lápiz" en lugar de huella escaneada. Comparación visual confirmada en las 4 clases Vucetich.
+
+**Diagnóstico realizado:**
+
+- Las samples del camino B ya estaban "lavadas" en `epoch_020.png`, mucho antes de que el EMA acumulara historia significativa → **EMA descartado** como causa.
+- Comparando G crudo vs G_EMA cargados desde el mismo `ckpt_150.pt`, ambos igual de lavados; el EMA solo suaviza un toque más → **EMA confirmado descartado**.
+- Causa más probable: **DiffAugment-cutout** (mask del 50% del área) sobre huellas grayscale. En CelebA/CIFAR donde la información es redundante el cutout funciona; en huellas la señal es el contraste binario fuerte de las crestas, y enmascarar la mitad le baja el "techo de calidad" al D — el G aprende texturas blandas que pasan el test pero no parecen huellas reales.
+- Causa secundaria probable: Upsample-nearest + Conv 3x3 entrega texturas más blandas que ConvT 4x4. Sumado al cutout, el efecto se compone.
+
+**Decisión:** revertir los 4 cambios. El `generator.pt` shipping de Fase 5 (v1) sigue sirviendo a la app sin tocar.
+
+**Para futuros intentos** (en orden de mayor a menor probabilidad de mejora):
+
+1. **lightweight-GAN / FastGAN** (Liu et al. 2020) — arquitectura específicamente diseñada para datasets <10k y compute limitado. Requiere refactor grande pero el upside es alto.
+2. **R1 regularization** (gradient penalty en reales para el D) sin DiffAugment — cambio chico al D, mejora modesta documentada en StyleGAN2.
+3. Si se quiere reintentar DiffAugment, **probar solo `policy="translation"` (sin cutout)** — el cutout es la pieza más sospechosa de haber roto el contraste.
+
 ## Licencia
 
 MIT © Ariel
