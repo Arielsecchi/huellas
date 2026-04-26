@@ -50,11 +50,26 @@ class TrainConfig:
     # Balanceo de clases via WeightedRandomSampler.
     # SOCOFing trae A 8.3% / I 33.1% / E 37.1% / V 21.5%: sin balanceo, el G
     # sufre mode-collapse en Arcos (~498 muestras unicas, la cBN + hinge loss
-    # tira al G hacia clases mayoritarias). Con balanceo, cada batch ve las 4
-    # clases con frecuencia ~uniforme (oversampling de Arcos ~12x).
-    # Default True: experimentalmente comprobado en Fase 5 que sin esto el G
-    # nunca aprende Arcos.
-    balance_classes: bool = True
+    # tira al G hacia clases mayoritarias).
+    #
+    # Historial de Fase 5:
+    #   v1 (balance_classes=False, strength=irrelevante): 3/4 clases OK pero
+    #     A 0% (mode-collapse limpio en la minoria). Recomendado para shipping.
+    #   v2 (balance_classes=True, balance_strength=1.0 -> pesos 1/freq, Arcos
+    #     oversampleadas 4.4x): empeoro. Diferenciacion en ep.50 pero colapso
+    #     tardio total para ep.150 (las 4 clases generan el mismo patron).
+    #   v3 (deuda tecnica, NO entrenado aun): probar balance_classes=True con
+    #     balance_strength=0.5 (pesos 1/sqrt(freq), Arcos ~2.1x) + epochs=100
+    #     en vez de 150. Idea: el oversampling agresivo de v2 desestabilizo
+    #     el cBN; medio-paso puede preservar diversidad inter-clase sin matar
+    #     la convergencia.
+    balance_classes: bool = False
+
+    # Exponente del balanceo: pesos por muestra = 1 / (freq_clase ** strength).
+    #   strength=0.0 -> sin oversampling (equivale a balance_classes=False).
+    #   strength=0.5 -> 1/sqrt(freq), oversampling moderado (receta v3).
+    #   strength=1.0 -> 1/freq, oversampling fuerte (receta v2, colapso tardio).
+    balance_strength: float = 1.0
 
     # logging / sampling / checkpoints
     sample_every_epochs: int = 5

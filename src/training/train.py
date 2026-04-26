@@ -102,15 +102,14 @@ def _hflip_with_label_swap(imgs: torch.Tensor,
 
 def _build_balanced_sampler(dataset: HuellasDataset,
                             cfg: TrainConfig) -> WeightedRandomSampler:
-    """Sampler que iguala la frecuencia de cada clase Vucetich por epoca.
+    """Sampler que sub/sobre-muestrea segun frecuencia de clase.
 
-    Pesos por muestra = 1 / count(clase de la muestra). El sampler tira
-    `len(dataset)` indices con reemplazo, asi que las clases minoritarias
-    (Arcos, ~498 muestras) se muestrean ~12x para igualar a las mayoritarias.
-
-    Por que con reemplazo: sin reemplazo solo podriamos tirar como mucho
-    `min(class_count) * num_classes` ejemplos por epoca (~2000) y quedariamos
-    cortos. Con reemplazo cada epoca ve ~6000 indices balanceados.
+    Pesos por muestra = 1 / count(clase) ** balance_strength.
+      strength 1.0 -> 1/freq, balance "duro" (intentado en v2, colapso tardio).
+      strength 0.5 -> 1/sqrt(freq), balance moderado (receta v3 sugerida).
+    Con reemplazo: cada epoca ve len(dataset) indices muestreados con esos
+    pesos. Sin reemplazo nos quedariamos en min(class_count)*NUM_CLASSES ~2000
+    indices, demasiado poco para una epoca util.
     """
     labels = dataset.labels.numpy()
     class_counts = np.bincount(labels, minlength=NUM_CLASSES).astype(np.float64)
@@ -118,9 +117,10 @@ def _build_balanced_sampler(dataset: HuellasDataset,
         missing = [int(c) for c, n in enumerate(class_counts) if n == 0]
         raise RuntimeError(
             f"WeightedRandomSampler: faltan clases en el dataset: {missing}")
-    per_class_w = 1.0 / class_counts
+    per_class_w = 1.0 / np.power(class_counts, cfg.balance_strength)
     sample_weights = per_class_w[labels]
     print(f"[sampler] class counts: {class_counts.astype(int).tolist()} "
+          f"| strength={cfg.balance_strength} "
           f"-> pesos por clase {np.round(per_class_w / per_class_w.min(), 2).tolist()}")
     # generator local para reproducibilidad sin pisar el seed global
     g = torch.Generator().manual_seed(cfg.seed)
@@ -383,6 +383,10 @@ def _parse_args() -> TrainConfig:
                      action="store_false",
                      help="DataLoader uniforme (orden estricto del dataset)")
     p.set_defaults(balance_classes=cfg.balance_classes)
+    p.add_argument("--balance-strength", type=float, default=cfg.balance_strength,
+                   help="Exponente de los pesos: 1.0 = 1/freq (v2, agresivo), "
+                        "0.5 = 1/sqrt(freq) (v3, moderado). Solo aplica si "
+                        "--balance-classes esta activo.")
     args = p.parse_args()
     return TrainConfig(
         epochs=args.epochs,
@@ -397,6 +401,7 @@ def _parse_args() -> TrainConfig:
         ckpt_every_epochs=args.ckpt_every,
         resume_from=Path(args.resume) if args.resume else None,
         balance_classes=args.balance_classes,
+        balance_strength=args.balance_strength,
     )
 
 
