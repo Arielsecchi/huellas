@@ -1,21 +1,29 @@
 """Hiperparametros del entrenamiento.
 
-Los valores default siguen la receta DCGAN (Radford et al. 2015) con dos
-ajustes modernos que estabilizan mucho en datasets chicos:
+Receta "camino B" (defaults actuales): DCGAN base + ajustes para datasets
+chicos:
 
   - **Hinge loss** en vez de BCE: empuja los logits de reales hacia +1 y los
     de fakes hacia -1, con saturacion via ReLU. Mucho mas estable que BCE
     cuando el D se vuelve muy seguro y el gradiente del G colapsa.
   - **Adam betas (0.5, 0.999)**: beta1 bajo evita que el G oscile demasiado
     en las primeras epocas.
-  - Learning rate 2e-4 parejo para G y D.
+  - **TTUR** (Heusel et al. 2017): lr_d > lr_g. Default lr_g=1e-4, lr_d=4e-4
+    (ratio 4:1). En setups con SN+hinge sin TTUR el D suele quedarse
+    "lento" a partir de cierto punto y el G empieza a generar ruido suave
+    sin detalle. Subir lr_d arregla eso sin tener que duplicar pasos del D.
   - Batch size 64: entra comodo en una T4 de Colab Free a 128x128.
+  - **DiffAugment** (Zhao et al. 2020) con policy "translation,cutout" para
+    multiplicar el dataset efectivo. Imprescindible bajo 10k samples.
+  - **EMA del Generator** con decay 0.999: el modelo de inferencia es el
+    promedio movil, no el G crudo. Suaviza oscilaciones, mejora calidad
+    visible.
 
 Defaults razonables para este dataset (~6k huellas 128x128):
 
-  - 150 epocas: con hinge + cBN + horizontal flip, a las 50 epocas todavia
-    no habia aprendido crestas bien definidas. 150 dejan margen y en T4
-    tardan ~2-2.5 h (factible en Colab Free de una sentada).
+  - 150 epocas: con hinge + cBN + horizontal flip + DiffAugment + EMA, a
+    las 50 epocas todavia falta detalle de crestas. 150 dejan margen y en
+    T4 tardan ~2.5-3 h (DiffAug agrega ~10-15% por step).
   - Sampling cada 5 epocas (30 grillas en total, Drive contento).
   - Checkpoint cada 25 epocas.
 """
@@ -32,14 +40,24 @@ class TrainConfig:
     epochs: int = 150
     batch_size: int = 64
 
-    # optimizador (Adam DCGAN)
-    lr_g: float = 2e-4
-    lr_d: float = 2e-4
+    # optimizador (Adam DCGAN + TTUR: lr_d > lr_g)
+    lr_g: float = 1e-4
+    lr_d: float = 4e-4
     beta1: float = 0.5
     beta2: float = 0.999
 
     # ruido + arquitectura
     z_dim: int = 100
+
+    # DiffAugment: augs diferenciables aplicadas a real Y fake antes del D.
+    # "translation,cutout" es la receta default del paper para datasets chicos.
+    # "none" o "" desactiva DiffAugment (vuelve a la receta clasica).
+    diffaug_policy: str = "translation,cutout"
+
+    # EMA del Generator: g_ema = decay * g_ema + (1 - decay) * g.
+    # 0.999 promedia los ultimos ~1000 steps, que con batch=64 y ~6k samples
+    # son ~10 epocas. Es el default de StyleGAN2 y funciona bien aca.
+    ema_decay: float = 0.999
 
     # data augmentation
     # Horizontal flip aleatorio en reales. Como flippear cambia la clase
