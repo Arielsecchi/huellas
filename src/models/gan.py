@@ -12,13 +12,23 @@ clase. Asi la condicion llega con fuerza a todas las capas del G.
 Mantenemos el concat-en-z TAMBIEN como señal auxiliar al primer bloque: el
 ruido y la clase se mezclan desde la entrada y se refuerzan capa por capa.
 
+Up-sampling del Generator: **Upsample(nearest) + Conv2d 3x3** en cada bloque
+en vez de ConvTranspose2d 4x4 stride=2. La ConvT con stride=2 produce
+artefactos de checkerboard / blur sistematico cuando los strides no dividen
+el kernel (Odena, Dumoulin & Olah 2016, "Deconvolution and Checkerboard
+Artifacts"). El reemplazo por up-nearest + conv 3x3 (que es lo que usan
+StyleGAN/BigGAN/PGAN) elimina el checkerboard y produce texturas mas
+limpias, al mismo costo de parametros. El primer bloque (1x1 -> 4x4) sigue
+siendo ConvT 4x4 stride=1 padding=0 porque ahi no hay stride>1, no hay
+checkerboard, y es la unica forma sensata de subir desde 1x1.
+
 Discriminator: condicionamiento por mapa espacial aprendible concatenado
 como canal extra (Mirza-Osindero) + **spectral normalization** en cada
 Conv2d (Miyato et al. 2018). SN reemplaza al BN del D original: mantiene
 la red 1-Lipschitz, evita que el D explote sus logits y aplaste al G en
 las primeras epocas. Es la receta estandar para hinge GAN.
 
-Por que cDCGAN y no algo mas moderno (SAGAN, StyleGAN, BigGAN):
+Por que cDCGAN-modificado y no algo mas moderno (SAGAN, StyleGAN, BigGAN):
 
   1. Es la arquitectura condicional mas simple que funciona bien a 128x128
      con datasets chicos (~6k). Ideal para entrenar en Colab Free (T4, 12 GB).
@@ -110,20 +120,24 @@ class _GInitBlock(nn.Module):
 
 
 class _GUpBlock(nn.Module):
-    """Bloque up del Generator: ConvT 4x4 stride 2 + cBN + ReLU.
+    """Bloque up del Generator: Upsample(nearest) 2x + Conv 3x3 + cBN + ReLU.
 
-    Duplica H y W (kernel 4 stride 2 padding 1 = up 2x exacto).
+    El Upsample-nearest duplica H y W sin parametros y sin artefactos de
+    interpolacion, y la Conv 3x3 padding=1 mantiene esas dimensiones y
+    aprende a "limpiar" la salida. Esto evita el checkerboard que produce
+    ConvTranspose 4x4 stride=2 (Odena, Dumoulin & Olah 2016).
     """
 
     def __init__(self, in_ch: int, out_ch: int, num_classes: int) -> None:
         super().__init__()
-        self.convt = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=4,
-                                        stride=2, padding=1, bias=False)
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1,
+                              padding=1, bias=False)
         self.cbn = ConditionalBatchNorm2d(out_ch, num_classes)
         self.act = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return self.act(self.cbn(self.convt(x), y))
+        return self.act(self.cbn(self.conv(self.up(x)), y))
 
 
 def _sn(module: nn.Module) -> nn.Module:
@@ -181,10 +195,12 @@ class Generator(nn.Module):
         self.up3 = _GUpBlock(4 * c, 2 * c, num_classes)              # 16 -> 32
         self.up4 = _GUpBlock(2 * c, c, num_classes)                  # 32 -> 64
 
-        # bloque final: ConvT a img_channels + Tanh. Sin BN en la salida.
+        # bloque final: Upsample 2x + Conv 3x3 a img_channels + Tanh. Sin BN.
+        # Mismo motivo que _GUpBlock: evitar checkerboard de ConvT stride=2.
         self.to_img = nn.Sequential(
-            nn.ConvTranspose2d(c, img_channels, kernel_size=4, stride=2,
-                               padding=1, bias=False),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(c, img_channels, kernel_size=3, stride=1,
+                      padding=1, bias=False),
             nn.Tanh(),
         )
 
