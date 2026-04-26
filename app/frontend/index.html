@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Practica Vucetich — huellas dactilares</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="layout">
+    <header class="header">
+      <h1>Practica Vucetich</h1>
+      <p class="subtitle">Identifica el dactilograma. Atajos: <kbd>A</kbd> <kbd>I</kbd> <kbd>E</kbd> <kbd>V</kbd> &middot; <kbd>Enter</kbd> siguiente</p>
+    </header>
+
+    <section class="card" id="card">
+      <div class="fingerprint-frame">
+        <img id="fingerprint" alt="huella generada" />
+        <div class="badge" id="source-badge" hidden></div>
+      </div>
+
+      <div class="answers">
+        <button class="answer-btn" data-klass="A">
+          <span class="letter">A</span>
+          <span class="label">Arco</span>
+        </button>
+        <button class="answer-btn" data-klass="I">
+          <span class="letter">I</span>
+          <span class="label">Pres. Interna</span>
+        </button>
+        <button class="answer-btn" data-klass="E">
+          <span class="letter">E</span>
+          <span class="label">Pres. Externa</span>
+        </button>
+        <button class="answer-btn" data-klass="V">
+          <span class="letter">V</span>
+          <span class="label">Verticilo</span>
+        </button>
+      </div>
+
+      <div class="feedback" id="feedback" hidden>
+        <div class="feedback-line">
+          <span class="feedback-icon" id="feedback-icon"></span>
+          <span class="feedback-text" id="feedback-text"></span>
+        </div>
+        <button class="next-btn" id="next-btn">Siguiente <span class="kbd-hint">&crarr;</span></button>
+      </div>
+    </section>
+
+    <aside class="stats">
+      <h2>Estadisticas</h2>
+      <dl class="stats-grid">
+        <dt>Total</dt><dd id="stat-total">0</dd>
+        <dt>Aciertos</dt><dd id="stat-correct">0</dd>
+        <dt>Precision</dt><dd id="stat-accuracy">&mdash;</dd>
+        <dt>Racha</dt><dd id="stat-streak">0</dd>
+        <dt>Mejor racha</dt><dd id="stat-best">0</dd>
+      </dl>
+
+      <h3>Por clase</h3>
+      <table class="per-class" id="per-class">
+        <thead><tr><th>Clase</th><th>Aciertos</th><th>Total</th><th>%</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </aside>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

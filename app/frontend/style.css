@@ -1,0 +1,358 @@
+/* Paleta del proyecto Huellas-GAN
+   - Fondo papel-crema  : #f1e8d4
+   - Acento oxblood     : #7a1b1b
+   - Tinta oscura       : #2b1a0c
+   - Lineas suaves      : #d6cab2
+*/
+
+:root {
+  --bg: #f1e8d4;
+  --bg-alt: #ebdfc4;
+  --ink: #2b1a0c;
+  --ink-soft: #5a4732;
+  --line: #d6cab2;
+  --accent: #7a1b1b;
+  --accent-soft: #a83a3a;
+  --ok: #3d6b2b;
+  --ok-soft: #d4e3c8;
+  --bad: #7a1b1b;
+  --bad-soft: #ecd1d1;
+  --shadow: 0 2px 6px rgba(43, 26, 12, 0.12);
+
+  --font-display: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", "Consolas", "Courier New", monospace;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* HTML `hidden` necesita prioridad sobre `display: flex|grid|...` puesto en
+   las clases. Sin este override la feedback bar y el badge se quedaban
+   visibles aun con `hidden`. */
+[hidden] {
+  display: none !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  min-height: 100vh;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-rows: auto 1fr;
+  gap: 24px 32px;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.header {
+  grid-column: 1 / -1;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.header h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 2.4rem;
+  margin: 0 0 6px 0;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.subtitle kbd {
+  font-family: var(--font-mono);
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 0.85em;
+  color: var(--ink);
+}
+
+/* --- Card central con la huella --- */
+
+.card {
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.fingerprint-frame {
+  position: relative;
+  width: 320px;
+  height: 320px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#fingerprint {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* image-rendering pixelated mantiene la nitidez de las crestas a 128->320 */
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+}
+
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: rgba(43, 26, 12, 0.75);
+  color: var(--bg);
+  padding: 2px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+/* --- Botones de respuesta --- */
+
+.answers {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.answer-btn {
+  background: var(--bg);
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 8px 12px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+.answer-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.answer-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.answer-btn .letter {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.answer-btn .label {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  letter-spacing: 0.3px;
+}
+
+.answer-btn:hover:not(:disabled) .label {
+  color: var(--bg);
+}
+
+/* Marcado segun resultado del intento previo */
+.answer-btn.was-correct {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.answer-btn.was-incorrect {
+  background: var(--bad-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.answer-btn.was-correct-target {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+}
+
+/* --- Feedback + boton siguiente --- */
+
+.feedback {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+
+.feedback.correct { border-color: var(--ok); background: var(--ok-soft); }
+.feedback.incorrect { border-color: var(--accent); background: var(--bad-soft); }
+
+.feedback-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.feedback-icon {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg);
+  background: var(--ink-soft);
+}
+
+.feedback.correct .feedback-icon { background: var(--ok); }
+.feedback.incorrect .feedback-icon { background: var(--accent); }
+
+.next-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  letter-spacing: 0.3px;
+  transition: background 0.15s ease;
+}
+
+.next-btn:hover {
+  background: var(--accent-soft);
+}
+
+.next-btn .kbd-hint {
+  font-family: var(--font-mono);
+  margin-left: 6px;
+  opacity: 0.85;
+}
+
+/* --- Stats sidebar --- */
+
+.stats {
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+  height: fit-content;
+}
+
+.stats h2 {
+  font-family: var(--font-display);
+  margin: 0 0 12px 0;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 1.4rem;
+  letter-spacing: 0.3px;
+}
+
+.stats h3 {
+  font-family: var(--font-display);
+  margin: 18px 0 8px 0;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: 0.3px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.stats-grid dt {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.stats-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-align: right;
+  color: var(--ink);
+}
+
+.per-class {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.per-class th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.per-class td {
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+}
+
+.per-class td:first-child {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--accent);
+  width: 28px;
+}
+
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+  .fingerprint-frame { width: 260px; height: 260px; }
+  .answer-btn { padding: 10px 4px; }
+  .answer-btn .letter { font-size: 1.4rem; }
+  .answer-btn .label { font-size: 0.7rem; }
+}
